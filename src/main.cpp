@@ -1,5 +1,6 @@
 #include <ESP32Servo.h>
-
+#include <Arduino.h>
+#include <math.h>
 // Negro = BASE = GPIO23
 // Blanco = HOMBRO = GPIO22
 // Violeta = CODO = GPIO 21
@@ -15,6 +16,45 @@ int manoPin = 19;
 int minUs = 500;
 int maxUs = 2400;
 
+// Declaracion de los parametros en cm para la cinematica directa e inversa.
+const double L_A2 = 8.05;
+const double L_A3 = 8.0;
+const double Herramienta_X = 5.4;
+const double Herramienta_Z = -1.0;
+const double L_Codo = L_A3 + Herramienta_X; // 13.4 = 8 + 5.4
+const double S_X = 8.5;
+const double S_Y = 5.0;
+const double S_Z = 6.7;
+
+
+// Posiciones iniciales
+int posHombro = 50; // 0 para nuestra ref
+int posBase = 90; // 0 para nuestra ref
+int posCodo = 180 - 20; // 180 - pos; -90 para nuestra ref
+int posMano = 0; // 0 es cerrado
+
+// Parametros de calibracion.
+const int offsetBase = 90;
+const int offsetHombro = 50;
+const int offsetCodo = 180 - 20; // -90
+const int offsetMano = 0;
+
+const int signoBase = 1;
+const int signoHombro = -1;
+const int signoCodo = 1;
+const int signoMano = 1;
+
+const int servoMin = 0, servoMax = 180;
+const bool codoRelativoHombro = true; 
+
+// Funciones inline de utilidad (conversion de unidades, etc)
+inline double deg2rad(double grados) { return grados * M_PI / 180.0; }
+inline double rad2deg(double radianes) { return radianes * 180.0 / M_PI; }
+inline double clampDouble(double v, double lo, double hi) {if(v < lo) return lo; else if(v > hi) return hi; else return v;}
+inline int clampInt(int v, int lo, int hi) {if(v < lo) return lo; else if(v > hi) return hi; else return v;}
+
+
+// Funcion para mover el servo a una velocidad controlada.
 void moverSuave(Servo &servo, int &posActual, int posFinal, int velocidad) {
   if (posActual < posFinal) {
     for (int i = posActual; i <= posFinal; i++) {
@@ -30,6 +70,153 @@ void moverSuave(Servo &servo, int &posActual, int posFinal, int velocidad) {
   posActual = posFinal; // actualizar posición real
 }
 
+// Funciones para convertir grados a servos y viceversa
+int gradosAServo_small(double grados, int offset, int signo) {
+  int angulo = int(round(signo * grados + offset));
+  return clampInt(angulo, servoMin, servoMax);
+}
+
+double servoAGrados_small(int servo, int offset, int signo) {
+  return signo * (servo - offset);
+}
+
+int gradosAServo(double grados, Servo &servo) {
+  if (&servo == &ServoBase) return gradosAServo_small(grados, offsetBase, signoBase);
+  if (&servo == &ServoHombro) return gradosAServo_small(grados, offsetHombro, signoHombro);
+  if (&servo == &ServoMano) return gradosAServo_small(grados, offsetMano, signoMano);
+  if (&servo == &ServoCodo) {
+    double gradosCodo = grados;
+    if(codoRelativoHombro)
+    {
+      double hombroGradosActual = servoAGrados_small(posHombro, offsetHombro, signoHombro);
+      gradosCodo = grados + hombroGradosActual;
+    }
+    return gradosAServo_small(gradosCodo, offsetCodo, signoCodo);
+  }
+  return 90; // valor por defecto
+}
+
+double servoAGrados(int valorServo, Servo &servo) {
+  if (&servo == &ServoBase) return servoAGrados_small(valorServo, offsetBase, signoBase);
+  if (&servo == &ServoHombro) return servoAGrados_small(valorServo, offsetHombro, signoHombro);
+  if (&servo == &ServoMano) return servoAGrados_small(valorServo, offsetMano, signoMano);
+  if (&servo == &ServoCodo) {
+    double codoGrados = servoAGrados_small(valorServo, offsetCodo, signoCodo);
+    if(codoRelativoHombro)
+    {
+      double hombroGradosActual = servoAGrados_small(posHombro, offsetHombro, signoHombro);
+      codoGrados = codoGrados - hombroGradosActual;
+    }
+    return codoGrados;
+  }
+  return 0; // valor por defecto
+}
+
+// Cinematica directa, la entrada es en radianes y la salida es x,y,z en cm.
+void cinematicaDirecta(double a, double b, double c, double &x, double &y, double &z){
+  double d = -c-b;
+
+  double ca = cos(a), sa = sin(a);
+  double cb = cos(b), sb = sin(b); 
+  double cc = cos(c), sc = sin(c); 
+  double cd = cos(d), sd = sin(d);
+
+  double temp = (-sd - 5.4 * cd)*(-cb*cc +sb*sc) 
+  + (5.4*sd-cd)*(-sb*cc - cb*sc) 
+  - 8.0*sb*cc - 8*cb*sc - 8.05*sb;
+ 
+  x = 8.5 + ca * temp; 
+  y = 5 + sa * temp;
+
+  temp = (-sd -5.4*cd)*(-sb*cc-cb*sc) 
+  + (5.4*sd - cd)*(-sb*sc + cb*cc) 
+  - 8*sb*sc + 8*cb*cc;
+
+  z = temp + 8.05*cb + 6.7;
+}
+
+// Cinematica inversa.
+// Utilizaremos el Jacobiano transpuesto y la funcion de cinematica directa.
+// Entrada x,y,z.
+// Salidas a,b,c,d en radianes. Existe la opcion de dar una guess inicial.
+// Devuelve true si converge, false si no converge.
+bool cinematicaInversa(double xT, double yT, double zT,
+                      double &a, double &b, double &c, double &d,
+                      double aInitial=0.0, double bInitial=0.0, double cInitial=0.0,
+                      int maxIter = 800, double tol = 0.1 /*cm*/, double alpha = 0.3){
+  // Inicializacion.
+  a = aInitial; b = bInitial; c = cInitial; d = -c-b;
+  const double h = 1e-6; // paso para diferencias finitas.
+  double prevError = 1e9;
+
+  for(int iter = 0; iter < maxIter; iter++)
+  {
+    double xC, yC, zC;
+    cinematicaDirecta(a, b, c, xC, yC, zC);
+
+    // Calculo del error.
+    double ex = xT - xC;
+    double ey = yT - yC;
+    double ez = zT - zC;
+    double error = sqrt(ex*ex + ey*ey + ez*ez);
+    if(error < tol) 
+    {
+      d = -b - c;
+      return true; // Convergio.
+    }
+
+    // Calculo del Jacobiano por diferencias finitas.
+    double J[3][3];
+    double fx = xC, fy = yC, fz = zC;
+    // Perturbacion en a
+    double tx, ty, tz;
+    cinematicaDirecta(a+h, b, c, tx, ty, tz);
+    J[0][0] = (tx - fx) / h;
+    J[1][0] = (ty - fy) / h;
+    J[2][0] = (tz - fz) / h;
+    // Perturbacion en b
+    cinematicaDirecta(a, b+h, c, tx, ty, tz);
+    J[0][1] = (tx - fx) / h;
+    J[1][1] = (ty - fy) / h;
+    J[2][1] = (tz - fz) / h;
+    // Perturbacion en c
+    cinematicaDirecta(a, b, c+h, tx, ty, tz);
+    J[0][2] = (tx - fx) / h;
+    J[1][2] = (ty - fy) / h;
+    J[2][2] = (tz - fz) / h;
+
+    // Jacobiano traspuesto * error -> delta angulo.
+    double da = alpha * (J[0][0]*ex + J[1][0]*ey + J[2][0]*ez);
+    double db = alpha * (J[0][1]*ex + J[1][1]*ey + J[2][1]*ez);
+    double dc = alpha * (J[0][2]*ex + J[1][2]*ey + J[2][2]*ez);
+
+    // Actualizacion de angulos.
+    const double maxStep = deg2rad(8.0); // maximo paso de 8 grados.
+    if(da > maxStep) da = maxStep; else if(da < -maxStep) da = -maxStep;
+    if(db > maxStep) db = maxStep; else if(db < -maxStep) db = -maxStep;
+    if(dc > maxStep) dc = maxStep; else if(dc < -maxStep) dc = -maxStep;
+
+    a += da;
+    b += db;
+    c += dc;
+
+    // Si el error empeora, reducir alpha.
+    if(error >= prevError)
+    { 
+      alpha *= 0.6;
+      if(alpha < 1e-3) alpha = 1e-3; // minimo alpha.
+    } else {
+      alpha = min(alpha * 1.1, 1.0); // aumentar alpha.
+    }
+    prevError = error;
+  }
+
+  return false; // No convergio.
+ }
+
+
+
+// Init.
 void setup() {
   Serial.begin(9600);
   delay(1000); // espera inicial para ver bien los mensajes
@@ -92,22 +279,16 @@ void setup() {
 
   // Mover a la posicion inicial
 
-  ServoHombro.write(40);
+  ServoHombro.write(posHombro);
   delay(150);
-  ServoBase.write(0);
+  ServoBase.write(posBase);
   delay(150);
-  ServoCodo.write(180 - 60);
+  ServoCodo.write(posCodo);
   delay(150);
-  ServoMano.write(0);
+  ServoMano.write(posMano);
   delay(150);
 
 }
-
-
-int posHombro = 0; 
-int posBase = 0;
-int posCodo = 180; // 180 - pos
-int posMano = 0; // 0 es cerrado
 
 // Nico: No bajes el delay a menos de 15 seg que se quema.
 void loop() {
@@ -134,6 +315,40 @@ void loop() {
     delay(2000);
     return;
   }
+
+  
+  moverSuave(ServoBase, posBase, 90 + 35, 30); // 35 grados
+  moverSuave(ServoHombro, posHombro, 50 + 45, 30); // -45 grados
+  moverSuave(ServoCodo, posCodo, 180 - 20 - 45, 30); // - 90 grados
+
+  Serial.println("Angulos: ");
+  Serial.println("Base: 35"); 
+  Serial.println("Hombro: -45");
+  Serial.println("Codo: -90");
+
+  double x, y, z;
+  cinematicaDirecta(deg2rad(35), deg2rad(-45), deg2rad(-90), x, y, z);
+  Serial.println("Posicion:");
+  Serial.print("X: "); Serial.println(x);
+  Serial.print("Y: "); Serial.println(y);
+  Serial.print("Z: "); Serial.println(z);
+
+  Serial.println("Cinematica inversa:");
+  double a, b, c, d;
+  bool exito = cinematicaInversa(x, y, z, a, b, c, d);
+  if(exito){
+    Serial.print("Angulos (grados): ");
+    Serial.print(rad2deg(a)); Serial.print(", ");
+    Serial.print(rad2deg(b)); Serial.print(", ");
+    Serial.print(rad2deg(c)); Serial.print(", ");
+    Serial.println(rad2deg(d));
+  } else {
+    Serial.println("No convergio.");
+  }
+
+  delay(15000); // espera 15 segundos
+
+
 
   /*Serial.println("Moviendo servo de 0° a 180°...");
   for (int pos = 0; pos <= 180; pos++) {
