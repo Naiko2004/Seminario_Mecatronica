@@ -12,19 +12,27 @@ template <typename T> int sgn(T val) {
 
 bool within(double v, double lo, double hi){ return v >= lo && v <= hi; }
 
-const int smoothingFactor = 10;
+enum estados
+{
+  IDLE,
+  MOVIENDO_INTERMEDIO,
+  FIN_INTERMEDIO,
+  MOVIENDO_FINAL,
+  FIN_FINAL,
+  LEVANTANDO
+};
 
+estados estado;
 
+struct punto
+{
+  double x;
+  double y;
+  double z;
+};
 
-
-int readPotentiometer(int pin, int &smoothedValue) {
-  int analogValue = analogRead(pin);
-  int mappedValue = map(analogValue, 0, 4095, 0, 180);
-
-  // Apply smoothing by averaging
-  smoothedValue = (smoothedValue * (smoothingFactor - 1) + mappedValue) / smoothingFactor;
-  return smoothedValue;
-}
+punto punto_objetivo;
+punto punto_intermedio;
 
 
 Servo ServoBase, ServoHombro, ServoCodo, ServoMano;   // Objeto servo
@@ -32,11 +40,6 @@ int basePin = 23;  // Pin de control del servo
 int hombroPin = 22;
 int codoPin = 21;
 int manoPin = 19;
-
-int basePotePin = 34;
-int hombroPotePin = 35;
-int codoPotePin = 32;
-int manoPotePin = 33;
 
 // Rango típico de pulsos para un servo SG90 (ajustable)
 int minUs = 500;
@@ -199,7 +202,9 @@ bool cinematicaInversa(double xT, double yT, double zT,
                       double aInitial=deg2rad(15.0), double bInitial=deg2rad(-22.5), double cInitial=deg2rad(-70.0),
                       int maxIter = 800, double tol = 0.1 /*cm*/, double alpha = 0.3){
   // Inicializacion.
-  a = aInitial; b = bInitial; c = cInitial; d = -c-b;
+  //a = atan((yT - 5)/(xT - 8.5));
+  a = aInitial;
+  b = bInitial; c = cInitial; d = -c-b;
   const double h = 1e-6; // paso para diferencias finitas.
   double prevError = 1e9;
 
@@ -337,6 +342,8 @@ void setup() {
 
   // Mover a la posicion inicial
 
+  estado = IDLE;
+
   ServoHombro.write(posHombro);
   delay(1500);
   ServoBase.write(posBase);
@@ -346,6 +353,20 @@ void setup() {
   ServoMano.write(posMano);
   delay(1500);
 
+  
+  punto_objetivo.x = 20.3;
+  punto_objetivo.y = 12.4;
+  punto_objetivo.z = 0.5;
+
+  punto_intermedio.x = punto_objetivo.x - 5;
+  punto_intermedio.y = punto_objetivo.y - 5;
+  punto_intermedio.z = punto_objetivo.z;
+
+  Serial.print("Punto Intermedio, X: "); Serial.println(punto_intermedio.x);
+  Serial.print("Punto Intermedio, Y: "); Serial.println(punto_intermedio.y);
+  Serial.print("Punto Intermedio, Z: "); Serial.println(punto_intermedio.z);
+
+  estado = MOVIENDO_INTERMEDIO;
 }
 
 bool trigger = false;
@@ -396,42 +417,97 @@ void loop() {
   Serial.print("Y: "); Serial.println(y);
   Serial.print("Z: "); Serial.println(z);*/
 
-
-  // Read and smooth potentiometer values
-  smoothedBase = readPotentiometer(basePotePin, smoothedBase);
-  smoothedHombro = readPotentiometer(hombroPotePin, smoothedHombro);
-  smoothedCodo = readPotentiometer(codoPotePin, smoothedCodo);
-  smoothedMano = readPotentiometer(manoPotePin, smoothedMano);
-
-moverGradual(ServoBase, posBase, smoothedBase, 3);
-moverGradual(ServoHombro, posHombro, smoothedHombro, 3);
-moverGradual(ServoCodo, posCodo, smoothedCodo, 3);
-moverGradual(ServoMano, posMano, smoothedMano, 3);
-
-delay(20); // Esto determina la "frecuencia" de movimiento
-
-
-
-
   // x y z
   // 15 16 1
   // 59.84, -65.87, -113.88
 
-  /*
+  // 10, 8, 10
+  // 63.43 97.77 -144.82
   double a,b,c,d;
-  bool exito = cinematicaInversa(10, 8, 10,a,b,c,d);
+  bool exito = false;
+
+  switch (estado)
+  {
+  case FIN_INTERMEDIO:
+    estado = MOVIENDO_FINAL;
+    break;
+
+  case MOVIENDO_INTERMEDIO:
+    exito = cinematicaInversa(punto_intermedio.x, punto_intermedio.y, punto_intermedio.z,a,b,c,d);
     if(exito){
     Serial.print("Angulos (grados): ");
     Serial.print(rad2deg(a)); Serial.print(", ");
     Serial.print(rad2deg(b)); Serial.print(", ");
     Serial.print(rad2deg(c)); Serial.print(", ");
     Serial.println(rad2deg(d));
-  } else {
+    } else {
     Serial.println("No convergio.");
+    }
+
+    if(exito)
+    {
+      moverGradual(ServoBase, posBase, gradosAServo(rad2deg(a), ServoBase), 1);
+      moverGradual(ServoHombro, posHombro,  gradosAServo(rad2deg(b), ServoHombro), 1);
+      moverGradual(ServoCodo, posCodo, gradosAServo(rad2deg(c), ServoCodo), 1);
+      moverGradual(ServoMano, posMano, 130, 2);
+      if( posBase -  gradosAServo(rad2deg(a), ServoBase) < 0.5 &&
+          posHombro -  gradosAServo(rad2deg(b), ServoHombro) < 0.5 &&
+          posCodo - gradosAServo(rad2deg(c), ServoCodo) < 0.5)
+          {
+            estado = FIN_INTERMEDIO;
+          }
+      delay(40);
+    }
+
+    break;
+    case MOVIENDO_FINAL:
+      exito = cinematicaInversa(punto_objetivo.x, punto_objetivo.y, punto_objetivo.z,a,b,c,d);
+      if(exito){
+      Serial.print("Angulos (grados): ");
+      Serial.print(rad2deg(a)); Serial.print(", ");
+      Serial.print(rad2deg(b)); Serial.print(", ");
+      Serial.print(rad2deg(c)); Serial.print(", ");
+      Serial.println(rad2deg(d));
+    } else {
+      Serial.println("No convergio.");
+    }
+
+    if(exito)
+    {
+      moverGradual(ServoBase, posBase, gradosAServo(rad2deg(a), ServoBase), 1);
+      moverGradual(ServoHombro, posHombro,  gradosAServo(rad2deg(b), ServoHombro), 1);
+      moverGradual(ServoCodo, posCodo, gradosAServo(rad2deg(c), ServoCodo), 1);
+      moverGradual(ServoMano, posMano, 130, 2);
+      if( posBase -  gradosAServo(rad2deg(a), ServoBase) < 0.2 &&
+          posHombro -  gradosAServo(rad2deg(b), ServoHombro) < 0.2 &&
+          posCodo - gradosAServo(rad2deg(c), ServoCodo) < 0.2)
+          {
+            estado = FIN_FINAL;
+          }
+      delay(40);
+    }
+    break;
+  case FIN_FINAL:
+    moverGradual(ServoMano, posMano, 0, 1);
+    if(posMano - 0 < 0.5)
+    {
+      estado = LEVANTANDO;
+    }
+    delay(20);
+    break;
+
+  case LEVANTANDO:
+    moverGradual(ServoHombro, posHombro, 50, 1);
+    moverGradual(ServoCodo, posCodo, offsetCodo, 1);
+    delay(20);
+    break;
   }
 
 
-  if(!trigger){
+
+
+/*
+  if(!trigger && exito){
   Serial.println("Moviendo base"); Serial.println(gradosAServo(rad2deg(a), ServoBase));
   moverSuave(ServoBase, posBase, gradosAServo(rad2deg(a), ServoBase), 30);
   delay(2000);
@@ -441,10 +517,13 @@ delay(20); // Esto determina la "frecuencia" de movimiento
   Serial.println("Moviendo Codo");  Serial.println(gradosAServo(rad2deg(c), ServoCodo));
   moverSuave(ServoCodo, posCodo,gradosAServo(rad2deg(c), ServoCodo), 30);
   delay(2000);
-  moverSuave(ServoMano, posMano, 130, 30);
+  moverSuave(ServoMano, posMano, 30, 30);
   trigger=true;
   }
-  */
+*/
+
+
+
 
   /*
   moverSuave(ServoBase, posBase, 90 + 35, 30); // 35 grados
