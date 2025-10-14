@@ -353,14 +353,14 @@ void setup() {
   ServoMano.write(posMano);
   delay(1500);
 
-  
-  punto_objetivo.x = 20.3;
-  punto_objetivo.y = 12.4;
+  // INVESTIGAR PID
+  punto_objetivo.x = 19.5;
+  punto_objetivo.y = 13;
   punto_objetivo.z = 0.5;
 
   punto_intermedio.x = punto_objetivo.x - 5;
   punto_intermedio.y = punto_objetivo.y - 5;
-  punto_intermedio.z = punto_objetivo.z;
+  punto_intermedio.z = 4;
 
   Serial.print("Punto Intermedio, X: "); Serial.println(punto_intermedio.x);
   Serial.print("Punto Intermedio, Y: "); Serial.println(punto_intermedio.y);
@@ -430,6 +430,7 @@ void loop() {
   {
   case FIN_INTERMEDIO:
     estado = MOVIENDO_FINAL;
+    delay(20);
     break;
 
   case MOVIENDO_INTERMEDIO:
@@ -446,13 +447,14 @@ void loop() {
 
     if(exito)
     {
-      moverGradual(ServoBase, posBase, gradosAServo(rad2deg(a), ServoBase), 1);
-      moverGradual(ServoHombro, posHombro,  gradosAServo(rad2deg(b), ServoHombro), 1);
-      moverGradual(ServoCodo, posCodo, gradosAServo(rad2deg(c), ServoCodo), 1);
-      moverGradual(ServoMano, posMano, 130, 2);
-      if( posBase -  gradosAServo(rad2deg(a), ServoBase) < 0.5 &&
-          posHombro -  gradosAServo(rad2deg(b), ServoHombro) < 0.5 &&
-          posCodo - gradosAServo(rad2deg(c), ServoCodo) < 0.5)
+      moverSuave(ServoBase, posBase, gradosAServo(rad2deg(a), ServoBase), 20);
+      moverSuave(ServoHombro, posHombro,  gradosAServo(rad2deg(b), ServoHombro), 20);
+      moverSuave(ServoCodo, posCodo, gradosAServo(rad2deg(c), ServoCodo), 20);
+      moverSuave(ServoMano, posMano, 130, 20);
+
+      if( abs(posBase -  gradosAServo(rad2deg(a), ServoBase)) <= 1 &&
+          abs(posHombro -  gradosAServo(rad2deg(b), ServoHombro)) <= 1 &&
+          abs(posCodo - gradosAServo(rad2deg(c), ServoCodo)) <= 1)
           {
             estado = FIN_INTERMEDIO;
           }
@@ -460,6 +462,7 @@ void loop() {
     }
 
     break;
+
     case MOVIENDO_FINAL:
       exito = cinematicaInversa(punto_objetivo.x, punto_objetivo.y, punto_objetivo.z,a,b,c,d);
       if(exito){
@@ -477,19 +480,19 @@ void loop() {
       moverGradual(ServoBase, posBase, gradosAServo(rad2deg(a), ServoBase), 1);
       moverGradual(ServoHombro, posHombro,  gradosAServo(rad2deg(b), ServoHombro), 1);
       moverGradual(ServoCodo, posCodo, gradosAServo(rad2deg(c), ServoCodo), 1);
-      moverGradual(ServoMano, posMano, 130, 2);
-      if( posBase -  gradosAServo(rad2deg(a), ServoBase) < 0.2 &&
-          posHombro -  gradosAServo(rad2deg(b), ServoHombro) < 0.2 &&
-          posCodo - gradosAServo(rad2deg(c), ServoCodo) < 0.2)
+      if( abs(posBase -  gradosAServo(rad2deg(a), ServoBase)) <= 1 &&
+          abs(posHombro -  gradosAServo(rad2deg(b), ServoHombro)) <= 1 &&
+          abs(posCodo - gradosAServo(rad2deg(c), ServoCodo)) <= 1)
           {
             estado = FIN_FINAL;
           }
       delay(40);
     }
     break;
+
   case FIN_FINAL:
     moverGradual(ServoMano, posMano, 0, 1);
-    if(posMano - 0 < 0.5)
+    if(abs(posMano - 0) <= 1)
     {
       estado = LEVANTANDO;
     }
