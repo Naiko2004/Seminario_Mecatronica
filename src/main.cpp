@@ -275,6 +275,51 @@ bool cinematicaInversa(double xT, double yT, double zT,
   return false; // No convergio.
  }
 
+bool obtenerAngulosParaMoverBrazo(punto &objetivo, double &a, double &b, double &c, double &d)
+{
+    bool exito = cinematicaInversa(objetivo.x, objetivo.y, objetivo.z,a,b,c,d);
+    if(exito){
+    Serial.print("Angulos (grados): ");
+    Serial.print(rad2deg(a)); Serial.print(", ");
+    Serial.print(rad2deg(b)); Serial.print(", ");
+    Serial.print(rad2deg(c)); Serial.print(", ");
+    Serial.println(rad2deg(d));
+    return exito;
+    }
+    Serial.println("No convergio.");
+    return exito;
+};
+
+
+
+void obtenerPuntoIntermedio(punto &input, punto &output)
+{
+  double dx = input.x - S_X;
+  double dy = input.y - S_Y;
+  double dz = input.z - S_Z;
+
+  double factor;
+  
+  // factor = sqrt( dx * dx + dy * dy + dz * dz);
+  
+  factor = 0.5;
+  
+  dx *= factor;
+  dy *= factor;
+  dz *= factor;
+
+  output.x = S_X + dx;
+  output.y = S_Y + dy;
+  output.z = S_Z + dz;
+
+  if(output.z < 5)
+  {
+    output.z = 5;
+  };
+
+};
+
+
 
 
 // Init.
@@ -354,13 +399,11 @@ void setup() {
   delay(1500);
 
   // INVESTIGAR PID
-  punto_objetivo.x = 19.5;
-  punto_objetivo.y = 13;
-  punto_objetivo.z = 0.5;
+  punto_objetivo.x = 19;
+  punto_objetivo.y = 16.5;
+  punto_objetivo.z = 1;
 
-  punto_intermedio.x = punto_objetivo.x - 5;
-  punto_intermedio.y = punto_objetivo.y - 5;
-  punto_intermedio.z = 4;
+  obtenerPuntoIntermedio(punto_objetivo, punto_intermedio);
 
   Serial.print("Punto Intermedio, X: "); Serial.println(punto_intermedio.x);
   Serial.print("Punto Intermedio, Y: "); Serial.println(punto_intermedio.y);
@@ -434,28 +477,19 @@ void loop() {
     break;
 
   case MOVIENDO_INTERMEDIO:
-    exito = cinematicaInversa(punto_intermedio.x, punto_intermedio.y, punto_intermedio.z,a,b,c,d);
-    if(exito){
-    Serial.print("Angulos (grados): ");
-    Serial.print(rad2deg(a)); Serial.print(", ");
-    Serial.print(rad2deg(b)); Serial.print(", ");
-    Serial.print(rad2deg(c)); Serial.print(", ");
-    Serial.println(rad2deg(d));
-    } else {
-    Serial.println("No convergio.");
-    }
+    exito = obtenerAngulosParaMoverBrazo(punto_intermedio, a, b, c, d);
 
     if(exito)
     {
-      moverSuave(ServoBase, posBase, gradosAServo(rad2deg(a), ServoBase), 20);
-      moverSuave(ServoHombro, posHombro,  gradosAServo(rad2deg(b), ServoHombro), 20);
-      moverSuave(ServoCodo, posCodo, gradosAServo(rad2deg(c), ServoCodo), 20);
-      moverSuave(ServoMano, posMano, 130, 20);
+      moverGradual(ServoBase, posBase, gradosAServo(rad2deg(a), ServoBase), 1);
+      moverGradual(ServoHombro, posHombro,  gradosAServo(rad2deg(b), ServoHombro), 2);
+      moverGradual(ServoCodo, posCodo, gradosAServo(rad2deg(c), ServoCodo), 3);
 
       if( abs(posBase -  gradosAServo(rad2deg(a), ServoBase)) <= 1 &&
           abs(posHombro -  gradosAServo(rad2deg(b), ServoHombro)) <= 1 &&
           abs(posCodo - gradosAServo(rad2deg(c), ServoCodo)) <= 1)
           {
+            moverSuave(ServoMano, posMano, 130, 20);
             estado = FIN_INTERMEDIO;
           }
       delay(40);
@@ -464,16 +498,7 @@ void loop() {
     break;
 
     case MOVIENDO_FINAL:
-      exito = cinematicaInversa(punto_objetivo.x, punto_objetivo.y, punto_objetivo.z,a,b,c,d);
-      if(exito){
-      Serial.print("Angulos (grados): ");
-      Serial.print(rad2deg(a)); Serial.print(", ");
-      Serial.print(rad2deg(b)); Serial.print(", ");
-      Serial.print(rad2deg(c)); Serial.print(", ");
-      Serial.println(rad2deg(d));
-    } else {
-      Serial.println("No convergio.");
-    }
+      exito = obtenerAngulosParaMoverBrazo(punto_objetivo, a, b, c, d);
 
     if(exito)
     {
