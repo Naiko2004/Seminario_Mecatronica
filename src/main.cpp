@@ -519,7 +519,6 @@ void setup() {
   Serial.print("Punto Intermedio, Y: "); Serial.println(punto_intermedio.y);
   Serial.print("Punto Intermedio, Z: "); Serial.println(punto_intermedio.z);
 
-  estado = IDLE;
 }
 
 bool trigger = false;
@@ -586,7 +585,7 @@ void loop() {
   case IDLE:
     punto temporal;
     cinematicaDirecta(posBase, posHombro, posCodo, temporal.x, temporal.y, temporal.z);
-    evitarObstaculosConObjeto(temporal, punto_intermedio, punto_intermedio, esquivar);
+    evitarObstaculosConObjeto(temporal, punto_intermedio, punto_intermedio, esquivar, 5);
     if(esquivar)
     {
       estado = ESQUIVAR_INICIO;
@@ -632,7 +631,7 @@ void loop() {
           abs(posHombro -  gradosAServo(rad2deg(b), ServoHombro)) <= 1 &&
           abs(posCodo - gradosAServo(rad2deg(c), ServoCodo)) <= 1)
           {
-            moverSuave(ServoMano, posMano, 130, 20);
+            moverSuave(ServoMano, posMano, 70, 20);
             estado = FIN_INTERMEDIO;
           }
       delay(40);
@@ -708,7 +707,7 @@ void loop() {
       flag = false;
       punto_objetivo.x = 25;
       punto_objetivo.y = 8;
-      punto_objetivo.z = 5;
+      punto_objetivo.z = 4.5;
 
       obtenerPuntoIntermedio(punto_objetivo, punto_intermedio);
       estado = MOVIENDO_INTERMEDIO_BAJAR;
