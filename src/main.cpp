@@ -19,7 +19,17 @@ enum estados
   FIN_INTERMEDIO,
   MOVIENDO_FINAL,
   FIN_FINAL,
-  LEVANTANDO
+  LEVANTANDO,
+  MOVIENDO_OBSTACULO,
+  FIN_OBSTACULO,
+  MOVIENDO_INTERMEDIO_BAJAR,
+  FIN_INTERMEDIO_BAJAR,
+  MOVIENDO_FINAL_BAJAR,
+  FIN_FINAL_BAJAR,
+  SOLTANDO,
+  FIN,
+  ESQUIVAR,
+  ESQUIVAR_INICIO
 };
 
 estados estado;
@@ -319,6 +329,104 @@ void obtenerPuntoIntermedio(punto &input, punto &output)
 
 };
 
+// OBSTACULOS UPDATE by Franco:
+
+// Estructura para obstáculos
+struct Obstaculo {
+  double x, y, z;
+  double radio;
+};
+
+Obstaculo obstaculos[5];
+int numObstaculos = 0;
+
+// Agregar obstáculo
+void agregarObstaculo(double x, double y, double z, double radio) {
+  if (numObstaculos < 5) {
+    obstaculos[numObstaculos].x = x; // 20
+    obstaculos[numObstaculos].y = y; // 9 o 10
+    obstaculos[numObstaculos].z = z; // 4 o 3.5
+    obstaculos[numObstaculos].radio = radio; // 7.7 / 2
+    numObstaculos++;
+  }
+}
+
+// Calcular distancia 3D
+double distancia(double x1, double y1, double z1, double x2, double y2, double z2) {
+  double dx = x2 - x1;
+  double dy = y2 - y1;
+  double dz = z2 - z1;
+  return sqrt(dx*dx + dy*dy + dz*dz);
+}
+
+// Distancia de punto a línea
+double distanciaPuntoLinea(double px, double py, double pz,
+                           double x1, double y1, double z1,
+                           double x2, double y2, double z2) {
+  double vx = x2 - x1;
+  double vy = y2 - y1;
+  double vz = z2 - z1;
+  
+  double wx = px - x1;
+  double wy = py - y1;
+  double wz = pz - z1;
+  
+  double c1 = vx*wx + vy*wy + vz*wz;
+  if (c1 <= 0) return distancia(px, py, pz, x1, y1, z1);
+  
+  double c2 = vx*vx + vy*vy + vz*vz;
+  if (c1 >= c2) return distancia(px, py, pz, x2, y2, z2);
+  
+  double t = c1 / c2;
+  double cx = x1 + t * vx;
+  double cy = y1 + t * vy;
+  double cz = z1 + t * vz;
+  
+  return distancia(px, py, pz, cx, cy, cz);
+}
+
+// ============================================
+// FUNCIÓN PRINCIPAL DE EVITACIÓN
+// ============================================
+void evitarObstaculosConObjeto(punto posicionActual, 
+                               punto puntoDestino,
+                               punto &puntoEvitacion,
+                               bool &hayObstaculo,
+                               double margen = 2.5) {
+  
+  hayObstaculo = false;
+  
+  // Verificar si hay obstáculos en el camino
+  for (int i = 0; i < numObstaculos; i++) {
+    double dist = distanciaPuntoLinea(obstaculos[i].x, obstaculos[i].y, obstaculos[i].z,
+                                      posicionActual.x, posicionActual.y, posicionActual.z,
+                                      puntoDestino.x, puntoDestino.y, puntoDestino.z);
+    
+    if (dist < (obstaculos[i].radio + margen)) {
+      Serial.print("Obstáculo #"); Serial.print(i); Serial.println(" detectado");
+      hayObstaculo = true;
+      
+      // Calcular punto de evitación (subir por encima)
+      puntoEvitacion.x = (posicionActual.x + puntoDestino.x) / 2.0;
+      puntoEvitacion.y = (posicionActual.y + puntoDestino.y) / 2.0;
+      puntoEvitacion.z = obstaculos[i].z + obstaculos[i].radio + margen + 4.0;
+      
+      if (puntoEvitacion.z < 10.0) {
+        puntoEvitacion.z = 10.0;
+      }
+      
+      Serial.print("Evitación: X="); Serial.print(puntoEvitacion.x);
+      Serial.print(" Y="); Serial.print(puntoEvitacion.y);
+      Serial.print(" Z="); Serial.println(puntoEvitacion.z);
+      
+      return;
+    }
+  }
+  
+  if (!hayObstaculo) {
+    Serial.println(" Ruta libre");
+  }
+}
 
 
 
@@ -403,16 +511,20 @@ void setup() {
   punto_objetivo.y = 16.5;
   punto_objetivo.z = 1;
 
+  agregarObstaculo(20, 10, 4, 7.7/2);
+
   obtenerPuntoIntermedio(punto_objetivo, punto_intermedio);
 
   Serial.print("Punto Intermedio, X: "); Serial.println(punto_intermedio.x);
   Serial.print("Punto Intermedio, Y: "); Serial.println(punto_intermedio.y);
   Serial.print("Punto Intermedio, Z: "); Serial.println(punto_intermedio.z);
 
-  estado = MOVIENDO_INTERMEDIO;
+  estado = IDLE;
 }
 
 bool trigger = false;
+bool flag = false;
+bool esquivar = false;
 
 // Nico: No bajes el delay a menos de 15 seg que se quema.
 void loop() {
@@ -471,6 +583,37 @@ void loop() {
 
   switch (estado)
   {
+  case IDLE:
+    punto temporal;
+    cinematicaDirecta(posBase, posHombro, posCodo, temporal.x, temporal.y, temporal.z);
+    evitarObstaculosConObjeto(temporal, punto_intermedio, punto_intermedio, esquivar);
+    if(esquivar)
+    {
+      estado = ESQUIVAR_INICIO;
+    }else{
+      estado = MOVIENDO_INTERMEDIO;
+    }
+    break;
+  case ESQUIVAR_INICIO:
+   exito = obtenerAngulosParaMoverBrazo(punto_intermedio, a, b, c, d);
+
+    if(exito)
+    {
+      moverGradual(ServoBase, posBase, gradosAServo(rad2deg(a), ServoBase), 1);
+      moverGradual(ServoHombro, posHombro,  gradosAServo(rad2deg(b), ServoHombro), 2);
+      moverGradual(ServoCodo, posCodo, gradosAServo(rad2deg(c), ServoCodo), 3);
+
+      if( abs(posBase -  gradosAServo(rad2deg(a), ServoBase)) <= 1 &&
+          abs(posHombro -  gradosAServo(rad2deg(b), ServoHombro)) <= 1 &&
+          abs(posCodo - gradosAServo(rad2deg(c), ServoCodo)) <= 1)
+          {
+            esquivar = false;
+            obtenerPuntoIntermedio(punto_objetivo, punto_intermedio);
+            estado = MOVIENDO_INTERMEDIO;
+          }
+      delay(40);
+    }
+    break;
   case FIN_INTERMEDIO:
     estado = MOVIENDO_FINAL;
     delay(20);
@@ -527,6 +670,141 @@ void loop() {
   case LEVANTANDO:
     moverGradual(ServoHombro, posHombro, 50, 1);
     moverGradual(ServoCodo, posCodo, offsetCodo, 1);
+    delay(20);
+    if(!flag)
+    {
+      flag = true;
+      
+      punto_objetivo.x = 20;
+      punto_objetivo.y = 6.5;
+      punto_objetivo.z = 14;
+    }
+
+    if(abs(posHombro -  50) <= 1 && abs(posCodo - offsetCodo) <= 1)
+          {
+            estado = MOVIENDO_OBSTACULO ;
+          }    
+    break;
+  case MOVIENDO_OBSTACULO:
+    exito = obtenerAngulosParaMoverBrazo(punto_objetivo, a, b, c, d);
+
+    if(exito)
+    {
+      moverGradual(ServoBase, posBase, gradosAServo(rad2deg(a), ServoBase), 1);
+      moverGradual(ServoHombro, posHombro,  gradosAServo(rad2deg(b), ServoHombro), 1);
+      moverGradual(ServoCodo, posCodo, gradosAServo(rad2deg(c), ServoCodo), 1);
+      if( abs(posBase -  gradosAServo(rad2deg(a), ServoBase)) <= 1 &&
+          abs(posHombro -  gradosAServo(rad2deg(b), ServoHombro)) <= 1 &&
+          abs(posCodo - gradosAServo(rad2deg(c), ServoCodo)) <= 1)
+          {
+            estado = FIN_OBSTACULO;
+          }
+      delay(40);
+    }
+    break;
+  case FIN_OBSTACULO:
+    if(flag)
+    {
+      flag = false;
+      punto_objetivo.x = 25;
+      punto_objetivo.y = 8;
+      punto_objetivo.z = 5;
+
+      obtenerPuntoIntermedio(punto_objetivo, punto_intermedio);
+      estado = MOVIENDO_INTERMEDIO_BAJAR;
+    }
+    break;
+  case MOVIENDO_INTERMEDIO_BAJAR:
+    exito = obtenerAngulosParaMoverBrazo(punto_intermedio, a, b, c, d);
+
+    if(exito)
+    {
+      moverGradual(ServoBase, posBase, gradosAServo(rad2deg(a), ServoBase), 1);
+      moverGradual(ServoHombro, posHombro,  gradosAServo(rad2deg(b), ServoHombro), 2);
+      moverGradual(ServoCodo, posCodo, gradosAServo(rad2deg(c), ServoCodo), 3);
+
+      if( abs(posBase -  gradosAServo(rad2deg(a), ServoBase)) <= 1 &&
+          abs(posHombro -  gradosAServo(rad2deg(b), ServoHombro)) <= 1 &&
+          abs(posCodo - gradosAServo(rad2deg(c), ServoCodo)) <= 1)
+          {
+            evitarObstaculosConObjeto(punto_intermedio, punto_objetivo, punto_intermedio, esquivar);
+            estado = FIN_INTERMEDIO_BAJAR;
+          }
+      delay(40);
+    }
+    break;
+  case FIN_INTERMEDIO_BAJAR:
+    if(esquivar)
+    {
+      estado = ESQUIVAR;
+    }else{
+    estado = MOVIENDO_FINAL_BAJAR;
+    }
+    break;
+  case ESQUIVAR:
+    exito = obtenerAngulosParaMoverBrazo(punto_intermedio, a, b, c, d);
+
+    if(exito)
+    {
+      moverGradual(ServoBase, posBase, gradosAServo(rad2deg(a), ServoBase), 1);
+      moverGradual(ServoHombro, posHombro,  gradosAServo(rad2deg(b), ServoHombro), 2);
+      moverGradual(ServoCodo, posCodo, gradosAServo(rad2deg(c), ServoCodo), 3);
+
+      if( abs(posBase -  gradosAServo(rad2deg(a), ServoBase)) <= 1 &&
+          abs(posHombro -  gradosAServo(rad2deg(b), ServoHombro)) <= 1 &&
+          abs(posCodo - gradosAServo(rad2deg(c), ServoCodo)) <= 1)
+          {
+            esquivar = false;
+            estado = FIN_INTERMEDIO_BAJAR;
+          }
+      delay(40);
+    }
+    break;
+  case MOVIENDO_FINAL_BAJAR:
+    exito = obtenerAngulosParaMoverBrazo(punto_objetivo, a, b, c, d);
+
+    if(exito)
+    {
+      moverGradual(ServoBase, posBase, gradosAServo(rad2deg(a), ServoBase), 1);
+      moverGradual(ServoHombro, posHombro,  gradosAServo(rad2deg(b), ServoHombro), 1);
+      moverGradual(ServoCodo, posCodo, gradosAServo(rad2deg(c), ServoCodo), 1);
+      if( abs(posBase -  gradosAServo(rad2deg(a), ServoBase)) <= 1 &&
+          abs(posHombro -  gradosAServo(rad2deg(b), ServoHombro)) <= 1 &&
+          abs(posCodo - gradosAServo(rad2deg(c), ServoCodo)) <= 1)
+          {
+            estado = FIN_FINAL_BAJAR;
+          }
+      delay(40);
+    }
+    break;
+  case FIN_FINAL_BAJAR:
+    moverGradual(ServoMano, posMano, 90, 1);
+    if(abs(posMano - 90) <= 1)
+    {
+      estado = SOLTANDO;
+    }
+    delay(20);
+    break;
+
+  case SOLTANDO:
+      moverGradual(ServoBase, posBase, offsetBase, 1);
+      moverGradual(ServoHombro, posHombro,  offsetHombro, 1);
+      moverGradual(ServoCodo, posCodo, 160, 1);
+      if( abs(posBase -  offsetBase) <= 1 &&
+          abs(posHombro -  offsetHombro) <= 1 &&
+          abs(posCodo - 160) <= 1)
+          {
+            estado = FIN;
+          }
+      delay(40);
+    break;
+  case FIN:
+    moverGradual(ServoMano, posMano, 0, 1);
+    if(abs(posMano - 0) <= 1)
+    {
+      // tamo?
+      //estado = IDLE;
+    }
     delay(20);
     break;
   }
